@@ -467,6 +467,15 @@ def main() -> None:
                     desc,
                 )
                 continue
+            if "LEV ATM" in desc:
+                log.info(
+                    "Skipping ATM withdrawal: %s %s %s %s",
+                    date,
+                    amount["amount"],
+                    amount["currency"],
+                    desc,
+                )
+                continue
             key = tx_key(date, amount["currency"], amount["amount"])
             near = fuzzy_match(seen, key)
             if near is not None:
