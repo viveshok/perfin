@@ -157,6 +157,36 @@ def tx_date(tx: dict) -> str:
     )
 
 
+def tx_time(tx: dict) -> str:
+    """Purchase time from entry_reference (see tx_date), empty if absent."""
+    match = re.search(
+        r"\d{4}-\d{2}-\d{2}-(\d{2})\.(\d{2})\.(\d{2})", tx.get("entry_reference") or ""
+    )
+    return ":".join(match.groups()) if match else ""
+
+
+def tx_summary(tx: dict) -> str:
+    """One line with everything useful to identify the transaction."""
+    amount = tx["transaction_amount"]
+    date = tx_date(tx)
+    parts = [
+        f"{date} {tx_time(tx)}".strip(),
+        f"{amount['amount']} {amount['currency']}",
+    ]
+    remittance = " ".join(tx.get("remittance_information") or [])
+    counterparty = (tx.get("creditor") or tx.get("debtor") or {}).get("name") or ""
+    if remittance:
+        parts.append(remittance)
+    if counterparty and counterparty not in remittance:
+        parts.append(counterparty)
+    booking = tx.get("booking_date")
+    if booking and booking != date:
+        parts.append(f"booked {booking}")
+    if tx.get("status") == "PDNG":
+        parts.append("(pending)")
+    return "  ".join(parts)
+
+
 def sheets_token(config: dict) -> str:
     sa = json.loads((HERE / config["service_account_key_file"]).read_text())
     now = int(datetime.now(timezone.utc).timestamp())
@@ -231,16 +261,16 @@ def sheet_id(config: dict, token: str) -> int:
 
 
 def sheet_state(config: dict, token: str) -> tuple[dict, list, list]:
-    """Return dedup keys (mapping key -> item names of matching rows), the date
-    column and (item, category) pairs of data rows."""
+    """Return dedup keys (mapping key -> (item, category) of matching rows), the
+    date column and (item, category) pairs of data rows."""
     url = f"{SHEETS_API}/{config['spreadsheet_id']}/values/{quote(config['sheet_tab'])}"
     log.info("Fetching existing rows from sheet tab %r", config["sheet_tab"])
     rows = sheets_api("GET", url, token).get("values", [])
     log.info("Sheet has %d rows (including header)", len(rows))
-    keys: dict[tuple, list[str]] = {}
+    keys: dict[tuple, list[tuple[str, str]]] = {}
     for row in rows[1:]:
         if len(row) >= 5:
-            keys.setdefault(tx_key(row[0], row[3], row[4]), []).append(row[1])
+            keys.setdefault(tx_key(row[0], row[3], row[4]), []).append((row[1], row[2]))
     dates = [row[0] if row else "" for row in rows[1:]]
     history = [(row[1], row[2]) for row in rows[1:] if len(row) >= 3]
     return keys, dates, history
@@ -316,11 +346,7 @@ def confirm_and_insert(
     date = tx_date(tx)
     amount = tx["transaction_amount"]
     desc = description(tx)
-    pending = " (pending)" if tx.get("status") == "PDNG" else ""
-    print(
-        f"\nNew transaction{pending}: "
-        f"{date}  {amount['amount']} {amount['currency']}  {desc}"
-    )
+    print(f"\nNew transaction: {tx_summary(tx)}")
     if input("Add to Google Sheets? [Y/n] ").strip().lower() in ("n", "no"):
         log.info("Skipped by user: %s %s %s", date, amount["amount"], desc)
         return False
@@ -401,11 +427,12 @@ def main() -> None:
                 continue
             near = fuzzy_match(seen, key)
             if near is not None:
-                item = seen[near][-1]
+                item, category = seen[near][-1]
                 print(
-                    f"\nPossible duplicate: {date}  {amount['amount']} "
-                    f"{amount['currency']}  {desc}\n"
-                    f"matches sheet row {near[0]}  {item!r} with the same amount."
+                    "\nPossible duplicate with the same amount:\n"
+                    f"  bank:  {tx_summary(tx)}\n"
+                    f"  sheet: {near[0]}  {near[2]} {near[1]}  {item!r}"
+                    + (f"  [{category}]" if category else "")
                 )
                 if input("Treat as duplicate and skip? [Y/n] ").strip().lower() not in (
                     "n",
