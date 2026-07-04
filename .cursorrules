@@ -1,0 +1,13 @@
+
+
+# instructions
+
+* the tech stack we use is nix, uv, Python 3, polars, elevenai API, openai API
+* Always prioritise that tech stack over alternatives.
+* type check the code after each modification, by running $ nix-shell --run "ty check"
+* lint the code after each modification, by running $ nix-shell --run "ruff format ."
+* avoid comments that simply state what the code is doing
+* Keep the codebase as small as possible to achieve the desired features
+* Avoid boilerplate code and too many abstractions
+* Keep code easy to reason about
+
