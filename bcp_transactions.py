@@ -269,10 +269,10 @@ def sheet_state(config: dict, token: str) -> tuple[dict, list, list]:
     log.info("Sheet has %d rows (including header)", len(rows))
     keys: dict[tuple, list[tuple[str, str]]] = {}
     for row in rows[1:]:
-        if len(row) >= 5:
-            keys.setdefault(tx_key(row[0], row[3], row[4]), []).append((row[1], row[2]))
+        if len(row) >= 6:
+            keys.setdefault(tx_key(row[0], row[4], row[5]), []).append((row[2], row[3]))
     dates = [row[0] if row else "" for row in rows[1:]]
-    history = [(row[1], row[2]) for row in rows[1:] if len(row) >= 3]
+    history = [(row[2], row[3]) for row in rows[1:] if len(row) >= 4]
     return keys, dates, history
 
 
@@ -359,7 +359,7 @@ def confirm_and_insert(
         token,
         grid_id,
         dates,
-        [date, item, category, amount["currency"], amount["amount"]],
+        [date, tx_time(tx), item, category, amount["currency"], amount["amount"]],
     )
     history.append((item, category))
     return True
