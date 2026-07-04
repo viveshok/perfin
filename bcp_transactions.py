@@ -1,9 +1,9 @@
 """Sync the last 24 hours of Millennium BCP expenses into a Google Sheet.
 
 Pulls recent transactions from the bank, checks which ones are already in the
-sheet (matched on date + currency + amount, counting occurrences; a same
-currency + amount row within 7 days is offered as a likely duplicate), and
-asks for confirmation before inserting each missing one at its date position.
+sheet (a row with the same currency + amount within 7 days, counting
+occurrences, is offered as a likely duplicate to confirm), and asks for
+confirmation before inserting each missing one at its date position.
 
 Setup:
 1. Create a free account at https://enablebanking.com and register an application
@@ -24,6 +24,7 @@ import logging
 import re
 import sys
 import uuid
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -37,6 +38,7 @@ SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets"
 HERE = Path(__file__).parent
 CONFIG_FILE = HERE / "config.json"
 SESSION_FILE = HERE / "session.json"
+SOURCE = "Millennium BCP"
 
 log = logging.getLogger("perfin")
 
@@ -165,6 +167,21 @@ def tx_time(tx: dict) -> str:
     return ":".join(match.groups()) if match else ""
 
 
+def drop_batch_timestamps(txs: list[dict]) -> None:
+    """BCP processes online purchases, direct debits and fees in overnight
+    batches; those rows share one second-level timestamp in entry_reference,
+    which is the batch time, not the purchase time. Drop the reference on such
+    rows so the date falls back to booking_date and the time stays empty."""
+    stamp = re.compile(r"\d{4}-\d{2}-\d{2}-\d{2}\.\d{2}\.\d{2}")
+    counts = Counter(
+        m.group() for tx in txs if (m := stamp.search(tx.get("entry_reference") or ""))
+    )
+    for tx in txs:
+        m = stamp.search(tx.get("entry_reference") or "")
+        if m and counts[m.group()] > 1:
+            tx["entry_reference"] = None
+
+
 def tx_summary(tx: dict) -> str:
     """One line with everything useful to identify the transaction."""
     amount = tx["transaction_amount"]
@@ -261,18 +278,21 @@ def sheet_id(config: dict, token: str) -> int:
 
 
 def sheet_state(config: dict, token: str) -> tuple[dict, list, list]:
-    """Return dedup keys (mapping key -> (item, category) of matching rows), the
-    date column and (item, category) pairs of data rows."""
+    """Return dedup keys (mapping key -> (item, category, row position, time,
+    source) of matching rows), the date column and (item, category) pairs of
+    data rows."""
     url = f"{SHEETS_API}/{config['spreadsheet_id']}/values/{quote(config['sheet_tab'])}"
     log.info("Fetching existing rows from sheet tab %r", config["sheet_tab"])
     rows = sheets_api("GET", url, token).get("values", [])
     log.info("Sheet has %d rows (including header)", len(rows))
-    keys: dict[tuple, list[tuple[str, str]]] = {}
-    for row in rows[1:]:
-        if len(row) >= 6:
-            keys.setdefault(tx_key(row[0], row[4], row[5]), []).append((row[2], row[3]))
+    keys: dict[tuple, list[tuple[str, str, int, str, str]]] = {}
+    for pos, row in enumerate(rows[1:]):
+        if len(row) >= 7:
+            keys.setdefault(tx_key(row[0], row[5], row[6]), []).append(
+                (row[3], row[4], pos, row[1].strip(), row[2].strip())
+            )
     dates = [row[0] if row else "" for row in rows[1:]]
-    history = [(row[2], row[3]) for row in rows[1:] if len(row) >= 4]
+    history = [(row[3], row[4]) for row in rows[1:] if len(row) >= 5]
     return keys, dates, history
 
 
@@ -308,7 +328,20 @@ def suggest(config: dict, history: list, desc: str, amount: dict) -> tuple[str, 
     return reply.get("item") or desc, reply.get("category") or ""
 
 
-def insert_row(config: dict, token: str, grid_id: int, dates: list, row: list) -> None:
+def set_cell(config: dict, token: str, pos: int, column: str, value: str) -> None:
+    """Write a value into the given column of the data row at the position."""
+    cell = f"{config['sheet_tab']}!{column}{pos + 2}"
+    url = (
+        f"{SHEETS_API}/{config['spreadsheet_id']}/values/{quote(cell)}"
+        "?valueInputOption=USER_ENTERED"
+    )
+    sheets_api("PUT", url, token, json={"values": [[value]]})
+    log.info("Filled in %s at %s", value, cell)
+
+
+def insert_row(
+    config: dict, token: str, grid_id: int, dates: list, seen: dict, row: list
+) -> None:
     """Insert the row after the last existing row whose date is <= the new one."""
     date = row[0]
     pos = next((i for i, d in enumerate(dates) if d > date), len(dates))
@@ -337,11 +370,22 @@ def insert_row(config: dict, token: str, grid_id: int, dates: list, row: list) -
     )
     sheets_api("PUT", url, token, json={"values": [row]})
     dates.insert(pos, date)
+    for items in seen.values():
+        items[:] = [
+            (item, category, p + 1 if p >= pos else p, time, source)
+            for item, category, p, time, source in items
+        ]
     log.info("Inserted row at position %d: %s", index + 1, row)
 
 
 def confirm_and_insert(
-    config: dict, token: str, grid_id: int, dates: list, history: list, tx: dict
+    config: dict,
+    token: str,
+    grid_id: int,
+    dates: list,
+    seen: dict,
+    history: list,
+    tx: dict,
 ) -> bool:
     date = tx_date(tx)
     amount = tx["transaction_amount"]
@@ -359,7 +403,16 @@ def confirm_and_insert(
         token,
         grid_id,
         dates,
-        [date, tx_time(tx), item, category, amount["currency"], amount["amount"]],
+        seen,
+        [
+            date,
+            tx_time(tx),
+            SOURCE,
+            item,
+            category,
+            amount["currency"],
+            amount["amount"],
+        ],
     )
     history.append((item, category))
     return True
@@ -400,6 +453,7 @@ def main() -> None:
                 status,
             )
         ]
+        drop_batch_timestamps(txs)
         for tx in reversed(txs):
             amount = tx["transaction_amount"]
             date = tx_date(tx)
@@ -414,31 +468,33 @@ def main() -> None:
                 )
                 continue
             key = tx_key(date, amount["currency"], amount["amount"])
-            if seen.get(key):
-                seen[key].pop()
-                log.info(
-                    "Already in sheet: %s %s %s %s",
-                    date,
-                    amount["amount"],
-                    amount["currency"],
-                    desc,
-                )
-                skipped += 1
-                continue
             near = fuzzy_match(seen, key)
             if near is not None:
-                item, category = seen[near][-1]
+                item, category, pos, row_time, row_source = seen[near][-1]
+                booking = tx.get("booking_date")
+                bank_notes = [
+                    f"booked {booking}" if booking and booking != date else "",
+                    "(pending)" if tx.get("status") == "PDNG" else "",
+                ]
+                bank_desc = "  ".join(p for p in [desc, *bank_notes] if p)
+                sheet_desc = item + (f"  [{category}]" if category else "")
+                width = max(len(amount["amount"]), len(near[2]))
                 print(
                     "\nPossible duplicate with the same amount:\n"
-                    f"  bank:  {tx_summary(tx)}\n"
-                    f"  sheet: {near[0]}  {near[2]} {near[1]}  {item!r}"
-                    + (f"  [{category}]" if category else "")
+                    f"  bank:  {date:10}  {tx_time(tx):8}  "
+                    f"{amount['amount']:>{width}} {amount['currency']}  {bank_desc}\n"
+                    f"  sheet: {near[0]:10}  {row_time:8}  "
+                    f"{near[2]:>{width}} {near[1]}  {sheet_desc}"
                 )
                 if input("Treat as duplicate and skip? [Y/n] ").strip().lower() not in (
                     "n",
                     "no",
                 ):
                     seen[near].pop()
+                    if not row_time and tx_time(tx):
+                        set_cell(config, token, pos, "B", tx_time(tx))
+                    if not row_source:
+                        set_cell(config, token, pos, "C", SOURCE)
                     log.info(
                         "Deduplicated against sheet row %s %r: %s %s %s %s",
                         near[0],
@@ -450,7 +506,7 @@ def main() -> None:
                     )
                     skipped += 1
                     continue
-            if confirm_and_insert(config, token, grid_id, dates, history, tx):
+            if confirm_and_insert(config, token, grid_id, dates, seen, history, tx):
                 added += 1
             else:
                 declined += 1
