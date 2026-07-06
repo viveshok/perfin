@@ -242,7 +242,9 @@ def sheets_api(method: str, url: str, token: str, **kwargs) -> dict:
 
 def tx_key(date: str, currency: str, amount: str) -> tuple:
     try:
-        normalized = str(Decimal(amount))
+        # normalize() drops trailing zeros so "19.90" matches "19.9"; the "f"
+        # format keeps integers like 20 out of scientific notation ("2E+1")
+        normalized = format(Decimal(amount).normalize(), "f")
     except InvalidOperation:
         normalized = amount
     return (date, currency.strip().upper(), normalized)
