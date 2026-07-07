@@ -1,9 +1,11 @@
 """Sync the last 24 hours of Millennium BCP expenses into a Google Sheet.
 
-Pulls recent transactions from the bank, checks which ones are already in the
-sheet (a row with the same currency + amount within 7 days, counting
-occurrences, is offered as a likely duplicate to confirm), and asks for
-confirmation before inserting each missing one at its date position.
+Pulls recent transactions from the bank and matches them against existing
+sheet rows by currency, amount, date and purchase time. Exact re-fetches of
+already synced rows are skipped silently; near matches (same currency and
+amount within 7 days, times not contradicting) are offered as likely
+duplicates to confirm. Missing transactions are inserted at their date
+position after confirmation.
 
 Setup:
 1. Create a free account at https://enablebanking.com and register an application
@@ -22,6 +24,7 @@ Setup:
 import json
 import logging
 import re
+import readline
 import sys
 import uuid
 from collections import Counter
@@ -240,35 +243,62 @@ def sheets_api(method: str, url: str, token: str, **kwargs) -> dict:
     return r.json()
 
 
-def tx_key(date: str, currency: str, amount: str) -> tuple:
+def tx_key(currency: str, amount: str) -> tuple[str, str]:
     try:
         # normalize() drops trailing zeros so "19.90" matches "19.9"; the "f"
         # format keeps integers like 20 out of scientific notation ("2E+1")
         normalized = format(Decimal(amount).normalize(), "f")
     except InvalidOperation:
         normalized = amount
-    return (date, currency.strip().upper(), normalized)
+    return (currency.strip().upper(), normalized)
 
 
-def fuzzy_match(seen: dict, key: tuple) -> tuple | None:
-    """Find the closest unmatched sheet key with the same currency and amount
-    within 7 days of the transaction date."""
-    date, currency, amount = key
+def parse_date(value: str) -> datetime | None:
     try:
-        target = datetime.fromisoformat(date)
+        return datetime.fromisoformat(value)
     except ValueError:
         return None
-    best = None
-    for candidate, items in seen.items():
-        if not items or candidate[1:] != (currency, amount):
-            continue
-        try:
-            diff = abs((datetime.fromisoformat(candidate[0]) - target).days)
-        except ValueError:
-            continue
-        if diff <= 7 and (best is None or diff < best[0]):
-            best = (diff, candidate)
-    return best[1] if best else None
+
+
+def clock(value: str) -> str:
+    """Time normalized to HH:MM for comparison, "" if there is no time.
+    Tolerates formatting differences between what the script writes and what
+    the sheet displays (dropped seconds, missing leading zero)."""
+    match = re.search(r"(\d{1,2}):(\d{2})", value)
+    return f"{int(match.group(1)):02d}:{match.group(2)}" if match else ""
+
+
+def match_rows(txs: list[dict], seen: dict) -> list[tuple[dict, dict | None]]:
+    """Pair each bank transaction with the best available sheet row of the
+    same currency and amount, or None if there is no plausible match.
+
+    Transactions are matched in chronological order and each row is used at
+    most once, so several identical purchases (e.g. daily coffees) pair up
+    with their own rows instead of all competing for the nearest one. Rows
+    more than 7 days away never match; when both sides carry a purchase time,
+    differing times mean distinct purchases and never match either."""
+    pairs = []
+    taken: set[int] = set()
+    for tx in sorted(txs, key=lambda t: (tx_date(t), tx_time(t))):
+        amount = tx["transaction_amount"]
+        date, time = tx_date(tx), clock(tx_time(tx))
+        target = parse_date(date)
+        best = None
+        for row in seen.get(tx_key(amount["currency"], amount["amount"]), []):
+            row_date = parse_date(row["date"])
+            row_time = clock(row["time"])
+            if id(row) in taken or target is None or row_date is None:
+                continue
+            diff = abs((row_date - target).days)
+            if diff > 7 or (time and row_time and row_time != time):
+                continue
+            score = (diff, row_time != time, row["pos"])
+            if best is None or score < best[0]:
+                best = (score, row)
+        if best:
+            taken.add(id(best[1]))
+        pairs.append((tx, best[1] if best else None))
+    return pairs
 
 
 def sheet_id(config: dict, token: str) -> int:
@@ -280,22 +310,30 @@ def sheet_id(config: dict, token: str) -> int:
 
 
 def sheet_state(config: dict, token: str) -> tuple[dict, list, list]:
-    """Return dedup keys (mapping key -> (item, category, row position, time,
-    source) of matching rows), the date column and (item, category) pairs of
-    data rows."""
+    """Return sheet rows grouped by (currency, amount), the date column and
+    (item, category) pairs of data rows."""
     url = f"{SHEETS_API}/{config['spreadsheet_id']}/values/{quote(config['sheet_tab'])}"
     log.info("Fetching existing rows from sheet tab %r", config["sheet_tab"])
     rows = sheets_api("GET", url, token).get("values", [])
     log.info("Sheet has %d rows (including header)", len(rows))
-    keys: dict[tuple, list[tuple[str, str, int, str, str]]] = {}
+    seen: dict[tuple[str, str], list[dict]] = {}
     for pos, row in enumerate(rows[1:]):
         if len(row) >= 7:
-            keys.setdefault(tx_key(row[0], row[5], row[6]), []).append(
-                (row[3], row[4], pos, row[1].strip(), row[2].strip())
+            seen.setdefault(tx_key(row[5], row[6]), []).append(
+                {
+                    "date": row[0],
+                    "time": row[1].strip(),
+                    "source": row[2].strip(),
+                    "item": row[3],
+                    "category": row[4],
+                    "currency": row[5].strip().upper(),
+                    "amount": row[6],
+                    "pos": pos,
+                }
             )
     dates = [row[0] if row else "" for row in rows[1:]]
     history = [(row[3], row[4]) for row in rows[1:] if len(row) >= 5]
-    return keys, dates, history
+    return seen, dates, history
 
 
 def suggest(config: dict, history: list, desc: str, amount: dict) -> tuple[str, str]:
@@ -328,6 +366,25 @@ def suggest(config: dict, history: list, desc: str, amount: dict) -> tuple[str, 
         return desc, ""
     reply = json.loads(r.json()["choices"][0]["message"]["content"])
     return reply.get("item") or desc, reply.get("category") or ""
+
+
+def input_prefilled(prompt: str, default: str, completions: list[str] = []) -> str:
+    """Prompt with the default pre-typed and editable, optionally with tab
+    completion over the given candidates."""
+
+    def complete(text: str, state: int) -> str | None:
+        matches = [c for c in completions if c.lower().startswith(text.lower())]
+        return matches[state] if state < len(matches) else None
+
+    readline.set_completer(complete)
+    readline.set_completer_delims("")
+    readline.parse_and_bind("tab: complete")
+    readline.set_startup_hook(lambda: readline.insert_text(default))
+    try:
+        return input(prompt).strip()
+    finally:
+        readline.set_startup_hook(None)
+        readline.set_completer(None)
 
 
 def set_cell(config: dict, token: str, pos: int, column: str, value: str) -> None:
@@ -372,12 +429,43 @@ def insert_row(
     )
     sheets_api("PUT", url, token, json={"values": [row]})
     dates.insert(pos, date)
-    for items in seen.values():
-        items[:] = [
-            (item, category, p + 1 if p >= pos else p, time, source)
-            for item, category, p, time, source in items
-        ]
+    for rows in seen.values():
+        for entry in rows:
+            if entry["pos"] >= pos:
+                entry["pos"] += 1
     log.info("Inserted row at position %d: %s", index + 1, row)
+
+
+def relevant(txs: list[dict], since: str) -> list[dict]:
+    """Drop credits, ATM withdrawals and transactions booked before the fetch
+    window. The window check uses the booking date, not the purchase date:
+    card authorizations are invisible to the API while pending, so a purchase
+    made days ago may book (and become fetchable) only now and must still be
+    offered."""
+    kept = []
+    for tx in txs:
+        amount = tx["transaction_amount"]
+        date = tx_date(tx)
+        desc = description(tx)
+        booked = tx.get("booking_date") or date
+        if booked and booked < since:
+            reason = f"booked before fetch window ({booked})"
+        elif tx["credit_debit_indicator"] == "CRDT":
+            reason = "credit"
+        elif "LEV ATM" in desc:
+            reason = "ATM withdrawal"
+        else:
+            kept.append(tx)
+            continue
+        log.info(
+            "Skipping %s: %s %s %s %s",
+            reason,
+            date,
+            amount["amount"],
+            amount["currency"],
+            desc,
+        )
+    return kept
 
 
 def confirm_and_insert(
@@ -397,9 +485,9 @@ def confirm_and_insert(
         log.info("Skipped by user: %s %s %s", date, amount["amount"], desc)
         return False
     default_item, default_category = suggest(config, history, desc, amount)
-    item = input(f"Item [{default_item}]: ").strip() or default_item
-    prompt = f"Category [{default_category}]: " if default_category else "Category: "
-    category = input(prompt).strip() or default_category
+    categories = sorted({c for _, c in history if c})
+    item = input_prefilled("Item: ", default_item)
+    category = input_prefilled("Category: ", default_category, categories)
     insert_row(
         config,
         token,
@@ -456,60 +544,65 @@ def main() -> None:
             )
         ]
         drop_batch_timestamps(txs)
-        for tx in reversed(txs):
+        for tx, row in match_rows(relevant(txs, since.date().isoformat()), seen):
             amount = tx["transaction_amount"]
             date = tx_date(tx)
+            time = tx_time(tx)
             desc = description(tx)
-            if tx["credit_debit_indicator"] == "CRDT":
-                log.info(
-                    "Skipping credit: %s %s %s %s",
-                    date,
-                    amount["amount"],
-                    amount["currency"],
-                    desc,
-                )
-                continue
-            if "LEV ATM" in desc:
-                log.info(
-                    "Skipping ATM withdrawal: %s %s %s %s",
-                    date,
-                    amount["amount"],
-                    amount["currency"],
-                    desc,
-                )
-                continue
-            key = tx_key(date, amount["currency"], amount["amount"])
-            near = fuzzy_match(seen, key)
-            if near is not None:
-                item, category, pos, row_time, row_source = seen[near][-1]
+            if row is not None:
+                if (
+                    row["date"] == date
+                    and time
+                    and clock(row["time"]) == clock(time)
+                    and row["source"] == SOURCE
+                ):
+                    log.info(
+                        "Already synced (same date, time and amount): %s %s %s %s %s",
+                        date,
+                        time,
+                        amount["amount"],
+                        amount["currency"],
+                        desc,
+                    )
+                    seen[tx_key(amount["currency"], amount["amount"])].remove(row)
+                    skipped += 1
+                    continue
                 booking = tx.get("booking_date")
                 bank_notes = [
                     f"booked {booking}" if booking and booking != date else "",
                     "(pending)" if tx.get("status") == "PDNG" else "",
                 ]
                 bank_desc = "  ".join(p for p in [desc, *bank_notes] if p)
-                sheet_desc = item + (f"  [{category}]" if category else "")
-                width = max(len(amount["amount"]), len(near[2]))
+                sheet_desc = row["item"] + (
+                    f"  [{row['category']}]" if row["category"] else ""
+                )
+                width = max(len(amount["amount"]), len(row["amount"]))
                 print(
                     "\nPossible duplicate with the same amount:\n"
-                    f"  bank:  {date:10}  {tx_time(tx):8}  "
+                    f"  bank:  {date:10}  {time:8}  "
                     f"{amount['amount']:>{width}} {amount['currency']}  {bank_desc}\n"
-                    f"  sheet: {near[0]:10}  {row_time:8}  "
-                    f"{near[2]:>{width}} {near[1]}  {sheet_desc}"
+                    f"  sheet: {row['date']:10}  {row['time']:8}  "
+                    f"{row['amount']:>{width}} {row['currency']}  {sheet_desc}"
                 )
                 if input("Treat as duplicate and skip? [Y/n] ").strip().lower() not in (
                     "n",
                     "no",
                 ):
-                    seen[near].pop()
-                    if not row_time and tx_time(tx):
-                        set_cell(config, token, pos, "B", tx_time(tx))
-                    if not row_source:
-                        set_cell(config, token, pos, "C", SOURCE)
+                    # Align the row with the bank's purchase date so the next
+                    # run recognizes it as already synced instead of asking
+                    # again.
+                    if date and row["date"] != date:
+                        set_cell(config, token, row["pos"], "A", date)
+                        dates[row["pos"]] = date
+                    if not row["time"] and time:
+                        set_cell(config, token, row["pos"], "B", time)
+                    if not row["source"]:
+                        set_cell(config, token, row["pos"], "C", SOURCE)
+                    seen[tx_key(amount["currency"], amount["amount"])].remove(row)
                     log.info(
                         "Deduplicated against sheet row %s %r: %s %s %s %s",
-                        near[0],
-                        item,
+                        row["date"],
+                        row["item"],
                         date,
                         amount["amount"],
                         amount["currency"],
