@@ -3,8 +3,8 @@
 Pulls recent transactions from the bank and matches them against existing
 sheet rows by currency, amount, date and purchase time. Exact re-fetches of
 already synced rows are skipped silently; near matches (same currency and
-amount within 7 days, times not contradicting) are offered as likely
-duplicates to confirm. Missing transactions are inserted at their date
+amount within 7 days, times not contradicting or within a few minutes) are
+offered as likely duplicates to confirm. Missing transactions are inserted at their date
 position after confirmation.
 
 Setup:
@@ -268,6 +268,16 @@ def clock(value: str) -> str:
     return f"{int(match.group(1)):02d}:{match.group(2)}" if match else ""
 
 
+def times_compatible(a: str, b: str) -> bool:
+    """Whether two HH:MM times could belong to the same purchase: equal,
+    either missing, or within 10 minutes of each other."""
+    if not a or not b or a == b:
+        return True
+    minutes_a = int(a[:2]) * 60 + int(a[3:])
+    minutes_b = int(b[:2]) * 60 + int(b[3:])
+    return abs(minutes_a - minutes_b) <= 10
+
+
 def match_rows(txs: list[dict], seen: dict) -> list[tuple[dict, dict | None]]:
     """Pair each bank transaction with the best available sheet row of the
     same currency and amount, or None if there is no plausible match.
@@ -275,8 +285,10 @@ def match_rows(txs: list[dict], seen: dict) -> list[tuple[dict, dict | None]]:
     Transactions are matched in chronological order and each row is used at
     most once, so several identical purchases (e.g. daily coffees) pair up
     with their own rows instead of all competing for the nearest one. Rows
-    more than 7 days away never match; when both sides carry a purchase time,
-    differing times mean distinct purchases and never match either."""
+    more than 7 days away never match. When both sides carry a purchase time,
+    clearly differing times mean distinct purchases and never match; small
+    differences are tolerated because the timestamp BCP reports can shift by
+    a few minutes between the pending and the booked version of a purchase."""
     pairs = []
     taken: set[int] = set()
     for tx in sorted(txs, key=lambda t: (tx_date(t), tx_time(t))):
@@ -290,7 +302,7 @@ def match_rows(txs: list[dict], seen: dict) -> list[tuple[dict, dict | None]]:
             if id(row) in taken or target is None or row_date is None:
                 continue
             diff = abs((row_date - target).days)
-            if diff > 7 or (time and row_time and row_time != time):
+            if diff > 7 or not times_compatible(time, row_time):
                 continue
             score = (diff, row_time != time, row["pos"])
             if best is None or score < best[0]:
@@ -594,7 +606,7 @@ def main() -> None:
                     if date and row["date"] != date:
                         set_cell(config, token, row["pos"], "A", date)
                         dates[row["pos"]] = date
-                    if not row["time"] and time:
+                    if time and clock(row["time"]) != clock(time):
                         set_cell(config, token, row["pos"], "B", time)
                     if not row["source"]:
                         set_cell(config, token, row["pos"], "C", SOURCE)
