@@ -353,14 +353,18 @@ def suggest(config: dict, history: list, desc: str, amount: dict) -> tuple[str, 
     categories = sorted({category for _, category in history if category})
     examples = "\n".join(f"{item} -> {category}" for item, category in history[-30:])
     prompt = (
-        "You clean up bank transaction descriptions for a personal expense sheet.\n"
+        "You clean up bank transaction descriptions for a personal expense sheet.\n\n"
+        "Recent entries from the sheet, as 'item -> category', shown only to "
+        "illustrate naming style and category usage:\n"
+        f"{examples}\n\n"
+        "Now the transaction to process:\n"
         f"Raw description: {desc}\n"
         f"Amount: {amount['amount']} {amount['currency']}\n\n"
-        "Rewrite the description as a short, human-readable item name (e.g. the "
-        "merchant or purpose, no codes or dates), and pick the best-fitting "
-        f"category from this list: {', '.join(categories)}\n\n"
-        "Recent entries from the sheet, as 'item -> category':\n"
-        f"{examples}\n\n"
+        "Rewrite the raw description as a short, human-readable item name (e.g. "
+        "the merchant or purpose, no codes or dates). The item name must be "
+        "derived from the raw description above, never copied from the examples. "
+        "Pick the best-fitting category from this list: "
+        f"{', '.join(categories)}\n\n"
         'Reply with JSON: {"item": ..., "category": ...}'
     )
     r = requests.post(
@@ -370,6 +374,7 @@ def suggest(config: dict, history: list, desc: str, amount: dict) -> tuple[str, 
             "model": config.get("openai_model", "gpt-4o-mini"),
             "messages": [{"role": "user", "content": prompt}],
             "response_format": {"type": "json_object"},
+            "temperature": 0,
         },
         timeout=30,
     )
