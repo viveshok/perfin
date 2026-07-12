@@ -3,6 +3,8 @@
   "private_key_file": "bcp_key.pem",
   "plaid_client_id": "your-plaid-client-id",
   "plaid_secret": "your-plaid-production-secret",
+  "natbank_user": "your-24-7cardaccess-user-id",
+  "natbank_password": "your-24-7cardaccess-password",
   "service_account_key_file": "google_service_account.json",
   "spreadsheet_id": "your-google-spreadsheet-id",
   "sheet_tab": "Expenses",

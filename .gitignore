@@ -1,6 +1,8 @@
 config.json
 session.json
 plaid_session.json
+natbank_profile/
+statements/
 bcp_key.pem
 google_service_account.json
 *.pem

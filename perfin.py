@@ -3,6 +3,8 @@
 Supported banks, each enabled by its keys being present in config.json:
 - Millennium BCP via Enable Banking (see bcp.py for setup)
 - Desjardins checking + credit card via Plaid (see desjardins.py for setup)
+- Natbank USD Mastercard via QFX files fetched from its card portal by a
+  Playwright browser, or downloaded manually (see natbank.py for setup)
 
 At launch you pick which configured bank to sync (skipped when only one is
 configured) and the lookback period in days (each bank has a sensible
@@ -14,7 +16,8 @@ offered as likely duplicates to confirm. Missing transactions are inserted at
 their date position after confirmation.
 
 Setup:
-1. Set up bank access following the docstrings of bcp.py and desjardins.py.
+1. Set up bank access following the docstrings of bcp.py, desjardins.py and
+   natbank.py.
 2. In Google Cloud, enable the Sheets API and create a service account with a
    JSON key. Save the key next to this script and share the spreadsheet with
    the service account's email (editor access).
@@ -41,6 +44,7 @@ import requests
 
 import bcp
 import desjardins
+import natbank
 
 SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets"
 HERE = Path(__file__).parent
@@ -358,6 +362,8 @@ def main() -> None:
         banks.append(("Millennium BCP", bcp))
     if "plaid_client_id" in config:
         banks.append(("Desjardins", desjardins))
+    if "natbank_user" in config or natbank.FOLDER.exists():
+        banks.append(("Natbank Mastercard", natbank))
     if not banks:
         sys.exit("No bank credentials in config.json (see config.example.json).")
     if len(banks) == 1:
