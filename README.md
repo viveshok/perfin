@@ -1,4 +1,9 @@
 
+# perfin
+
+Sync recent bank expenses into a Google Sheet. Run `uv run perfin.py`;
+see the docstrings of `perfin.py`, `bcp.py` and `desjardins.py` for setup.
+
 # developer notes
 
 * `uv tool run ruff format`
