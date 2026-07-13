@@ -210,18 +210,18 @@ def sheet_state(config: dict, token: str) -> tuple[dict, list, list]:
 def suggest(config: dict, history: list, tx: dict) -> tuple[str, str]:
     """Ask OpenAI for a readable item name and a category from those in use."""
     categories = sorted({category for _, category in history if category})
-    examples = "\n".join(f"{item} -> {category}" for item, category in history[-30:])
     prompt = (
-        "You clean up bank transaction descriptions for a personal expense sheet.\n\n"
-        "Recent entries from the sheet, as 'item -> category', shown only to "
-        "illustrate naming style and category usage:\n"
-        f"{examples}\n\n"
-        "Now the transaction to process:\n"
+        "You clean up bank transaction descriptions for a personal expense "
+        "sheet.\n\n"
         f"Raw description: {tx['desc']}\n"
         f"Amount: {tx['amount']} {tx['currency']}\n\n"
-        "Rewrite the raw description as a short, human-readable item name (e.g. "
-        "the merchant or purpose, no codes or dates). The item name must be "
-        "derived from the raw description above, never copied from the examples. "
+        "Rewrite the raw description as a short, human-readable item name: "
+        "the merchant or purpose, followed by the city if one is present. "
+        "Drop transaction codes, dates and card noise like COMPRA or "
+        "CONTACTLESS. Expand well-known merchant abbreviations (e.g. HM -> "
+        "H&M). Only use information present in the raw description; if the "
+        "merchant is unclear, return the cleaned-up description itself rather "
+        "than guessing.\n\n"
         "Pick the best-fitting category from this list: "
         f"{', '.join(categories)}\n\n"
         'Reply with JSON: {"item": ..., "category": ...}'
