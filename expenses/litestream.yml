@@ -1,0 +1,9 @@
+# Credentials come from the environment (see expenses.service):
+#   LITESTREAM_ACCESS_KEY_ID, LITESTREAM_SECRET_ACCESS_KEY
+dbs:
+  - path: /opt/expenses/expenses.db
+    replicas:
+      - type: s3
+        bucket: berraco-expenses-backup
+        path: expenses.db
+        region: eu-west-2

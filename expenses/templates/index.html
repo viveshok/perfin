@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Expenses</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: system-ui, sans-serif;
+    margin: 0 auto; max-width: 44rem; padding: 1rem;
+  }
+  header {
+    display: flex; justify-content: space-between; align-items: baseline;
+    gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1rem;
+  }
+  h1 { font-size: 1.3rem; margin: 0; }
+  header .who { font-size: 0.85rem; opacity: 0.7; }
+  form.submit {
+    display: grid; gap: 0.6rem;
+    grid-template-columns: 1fr 1fr;
+    padding: 1rem; border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+    border-radius: 0.6rem; margin-bottom: 1.5rem;
+  }
+  form.submit .full { grid-column: 1 / -1; }
+  label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.8rem; }
+  input, select, button {
+    font: inherit; padding: 0.55rem; border-radius: 0.4rem;
+    border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+    background: transparent; color: inherit;
+  }
+  input[type=file] { border: none; padding: 0.3rem 0; }
+  button.primary {
+    background: #2563eb; color: white; border: none;
+    font-weight: 600; padding: 0.7rem; cursor: pointer;
+  }
+  .totals { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; }
+  .totals span {
+    padding: 0.35rem 0.7rem; border-radius: 0.4rem; font-weight: 600;
+    background: color-mix(in srgb, currentColor 10%, transparent);
+  }
+  ul.expenses { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.5rem; }
+  ul.expenses li {
+    display: grid; gap: 0.15rem 0.75rem;
+    grid-template-columns: 1fr auto auto;
+    align-items: center; padding: 0.6rem 0.8rem;
+    border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+    border-radius: 0.5rem;
+  }
+  .desc { grid-column: 1; font-weight: 500; }
+  .meta { grid-column: 1; font-size: 0.8rem; opacity: 0.7; }
+  .amount { grid-column: 2; grid-row: 1 / span 2; font-weight: 600; white-space: nowrap; }
+  li form { grid-column: 3; grid-row: 1 / span 2; margin: 0; }
+  button.delete {
+    border: none; background: none; cursor: pointer;
+    color: #dc2626; font-size: 1.1rem; padding: 0.4rem;
+  }
+  .filter { margin-bottom: 1rem; }
+  .empty { opacity: 0.6; text-align: center; padding: 2rem 0; }
+  a { color: inherit; }
+  @media (max-width: 480px) {
+    form.submit { grid-template-columns: 1fr; }
+    form.submit .full { grid-column: 1; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Expenses</h1>
+  <span class="who">{{ email }} · <a href="{{ url_for('logout') }}">Sign out</a></span>
+</header>
+
+<form class="submit" method="post" action="{{ url_for('submit') }}" enctype="multipart/form-data">
+  <label>Amount
+    <input name="amount" inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*"
+           placeholder="0.00" required autofocus>
+  </label>
+  <label>Currency
+    <select name="currency">
+      {% for c in currencies %}
+      <option value="{{ c }}" {% if c == last_currency %}selected{% endif %}>{{ c }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label class="full">Description
+    <input name="description" placeholder="What was it for?" required>
+  </label>
+  <label>Date
+    <input type="date" name="date" value="{{ today }}" required>
+  </label>
+  <label>Receipt
+    <input type="file" name="receipt" accept="image/*,.pdf">
+  </label>
+  <button class="primary full" type="submit">Submit expense</button>
+</form>
+
+{% if admin %}
+<form class="filter" method="get" action="{{ url_for('index') }}">
+  <select name="user" onchange="this.form.submit()">
+    <option value="">All users</option>
+    {% for u in users %}
+    <option value="{{ u }}" {% if u == user_filter %}selected{% endif %}>{{ u }}</option>
+    {% endfor %}
+  </select>
+</form>
+{% endif %}
+
+{% if totals %}
+<div class="totals">
+  {% for currency, total in totals %}
+  <span>{{ currency }} {{ "%.2f"|format(total) }}</span>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if expenses %}
+<ul class="expenses">
+  {% for e in expenses %}
+  <li>
+    <span class="desc">{{ e.description }}</span>
+    <span class="meta">
+      {{ e.date }}{% if admin and not user_filter %} · {{ e.user_email }}{% endif %}
+      {% if e.has_receipt %} · <a href="{{ url_for('receipt', expense_id=e.id) }}">receipt</a>{% endif %}
+    </span>
+    <span class="amount">{{ e.currency }} {{ "%.2f"|format(e.amount|float) }}</span>
+    <form method="post" action="{{ url_for('delete', expense_id=e.id) }}"
+          onsubmit="return confirm('Delete this expense?')">
+      <button class="delete" type="submit" title="Delete">✕</button>
+    </form>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="empty">No expenses yet.</p>
+{% endif %}
+</body>
+</html>

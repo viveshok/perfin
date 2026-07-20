@@ -4,8 +4,9 @@
 
 * the tech stack we use is nix, uv, Python 3, polars, elevenai API, openai API
 * Always prioritise that tech stack over alternatives.
-* type check the code after each modification, by running $ nix-shell --run "ty check"
-* lint the code after each modification, by running $ nix-shell --run "ruff format ."
+* this is a monorepo: perfin/ and expenses/ are independent uv projects, each with its own pyproject.toml and .venv; shell.nix at the root is shared
+* type check the code after each modification, by running $ nix-shell ../shell.nix --run "ty check" from within the project directory you modified
+* lint the code after each modification, by running $ nix-shell ../shell.nix --run "ruff format ." from within the project directory you modified
 * avoid comments that simply state what the code is doing
 * Keep the codebase as small as possible to achieve the desired features
 * Avoid boilerplate code and too many abstractions

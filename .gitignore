@@ -1,11 +1,17 @@
-config.json
-session.json
-plaid_session.json
-natbank_profile/
-statements/
-bcp_key.pem
-google_service_account.json
-*.pem
 __pycache__/
 .venv/
 .ruff_cache/
+*.pem
+
+# perfin runtime files (credentials, sessions, downloaded statements)
+perfin/config.json
+perfin/session.json
+perfin/plaid_session.json
+perfin/natbank_profile/
+perfin/statements/
+perfin/google_service_account.json
+
+# expenses runtime files
+expenses/config.json
+expenses/litestream.env
+expenses/expenses.db*

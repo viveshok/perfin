@@ -1,0 +1,9 @@
+[project]
+name = "expenses"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "flask>=3.1",
+    "google-auth>=2.40",
+    "requests>=2.32",
+]

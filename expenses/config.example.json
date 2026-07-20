@@ -1,0 +1,6 @@
+{
+  "google_client_id": "1234567890-example.apps.googleusercontent.com",
+  "secret_key": "generate-with: python -c 'import secrets; print(secrets.token_hex(32))'",
+  "allowed_emails": ["employee1@example.com", "employee2@example.com"],
+  "admin_emails": ["boss@example.com"]
+}
