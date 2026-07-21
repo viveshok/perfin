@@ -31,7 +31,7 @@ Open http://127.0.0.1:8000 and use the "Dev login" link (no Google needed).
 
 ```sh
 ssh exe.dev new --name expenses
-rsync -a --exclude .venv --exclude expenses.db ./ expenses.exe.xyz:/opt/expenses/
+rsync -a --exclude .venv --exclude expenses.db --exclude config.json ./ expenses.exe.xyz:/opt/expenses/
 ssh expenses.exe.xyz
 ```
 
