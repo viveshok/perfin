@@ -56,6 +56,15 @@
     border: none; background: none; cursor: pointer;
     color: #dc2626; font-size: 1.1rem; padding: 0.4rem;
   }
+  .status {
+    font-size: 0.75rem; font-weight: 600; padding: 0.15rem 0.5rem;
+    border-radius: 999px; white-space: nowrap;
+    background: color-mix(in srgb, currentColor 10%, transparent);
+    opacity: 0.7;
+  }
+  .status.paid { background: #16a34a22; color: #16a34a; opacity: 1; }
+  li form.reimburse, li > .status { grid-column: 1; grid-row: 3; justify-self: start; }
+  button.status { border: none; cursor: pointer; }
   .filter { margin-bottom: 1rem; }
   .empty { opacity: 0.6; text-align: center; padding: 2rem 0; }
   a { color: inherit; }
@@ -123,6 +132,18 @@
       {{ e.date }}{% if admin and not user_filter %} · {{ e.user_email }}{% endif %}
       {% if e.has_receipt %} · <a href="{{ url_for('receipt', expense_id=e.id) }}">receipt</a>{% endif %}
     </span>
+    {% if admin %}
+    <form class="reimburse" method="post" action="{{ url_for('reimburse', expense_id=e.id) }}">
+      <button class="status {{ 'paid' if e.reimbursed }}" type="submit"
+              title="Toggle reimbursement status">
+        {{ 'Reimbursed' if e.reimbursed else 'Not reimbursed' }}
+      </button>
+    </form>
+    {% else %}
+    <span class="status {{ 'paid' if e.reimbursed }}">
+      {{ 'Reimbursed' if e.reimbursed else 'Not reimbursed' }}
+    </span>
+    {% endif %}
     <span class="amount">{{ e.currency }} {{ "%.2f"|format(e.amount|float) }}</span>
     <form method="post" action="{{ url_for('delete', expense_id=e.id) }}"
           onsubmit="return confirm('Delete this expense?')">

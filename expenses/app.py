@@ -58,9 +58,18 @@ with db() as _conn:
             description TEXT NOT NULL,
             receipt_name TEXT,
             receipt_blob BLOB,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            reimbursed INTEGER NOT NULL DEFAULT 0
         )
     """)
+    # Migration for databases created before the reimbursed column existed.
+    # ALTER TABLE is an ordinary WAL transaction, so Litestream replicates it
+    # to S3 like any other write; no backup-side action is needed.
+    _cols = {r[1] for r in _conn.execute("PRAGMA table_info(expenses)")}
+    if "reimbursed" not in _cols:
+        _conn.execute(
+            "ALTER TABLE expenses ADD COLUMN reimbursed INTEGER NOT NULL DEFAULT 0"
+        )
 
 
 def current_user() -> str | None:
@@ -129,7 +138,7 @@ def index():
     admin = is_admin(email)
     user_filter = request.args.get("user", "") if admin else email
 
-    query = "SELECT id, user_email, date, amount, currency, description, receipt_name IS NOT NULL AS has_receipt FROM expenses"
+    query = "SELECT id, user_email, date, amount, currency, description, reimbursed, receipt_name IS NOT NULL AS has_receipt FROM expenses"
     params: tuple = ()
     if user_filter:
         query += " WHERE user_email = ?"
@@ -216,6 +225,21 @@ def submit():
 
     session["last_currency"] = currency
     return redirect(url_for("index"))
+
+
+@app.post("/reimburse/<int:expense_id>")
+def reimburse(expense_id: int):
+    email = require_user()
+    if not is_admin(email):
+        abort(403)
+    with db() as conn:
+        updated = conn.execute(
+            "UPDATE expenses SET reimbursed = NOT reimbursed WHERE id = ?",
+            (expense_id,),
+        ).rowcount
+    if not updated:
+        abort(404)
+    return redirect(request.referrer or url_for("index"))
 
 
 @app.post("/delete/<int:expense_id>")
