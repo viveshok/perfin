@@ -156,6 +156,8 @@ def index():
 
     totals: dict[str, Decimal] = {}
     for e in expenses:
+        if e["reimbursed"]:
+            continue
         totals[e["currency"]] = totals.get(e["currency"], Decimal(0)) + Decimal(
             e["amount"]
         )
