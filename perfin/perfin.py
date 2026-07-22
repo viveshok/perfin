@@ -1,12 +1,14 @@
 """Sync recent bank expenses into a Google Sheet.
 
-Supported banks, each enabled by its keys being present in config.json:
+Supported sources, each enabled by its keys being present in config.json:
 - Millennium BCP via Enable Banking (see bcp.py for setup)
 - Desjardins checking + credit card via Plaid (see desjardins.py for setup)
 - Natbank USD Mastercard via QFX files fetched from its card portal by a
   Playwright browser, or downloaded manually (see natbank.py for setup)
+- Reimbursed expenses from the expenses app's SQLite database (see
+  expenses_db.py for setup)
 
-At launch you pick which configured bank to sync (skipped when only one is
+At launch you pick which configured source to sync (skipped when only one is
 configured) and the lookback period in days (each bank has a sensible
 default). Pulls recent transactions and matches them against existing
 sheet rows by currency, amount, date and purchase time. Exact re-fetches of
@@ -44,6 +46,7 @@ import requests
 
 import bcp
 import desjardins
+import expenses_db
 import natbank
 
 SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets"
@@ -357,30 +360,32 @@ def main() -> None:
         sys.exit("Missing config.json (see config.example.json and the docstring).")
     config = json.loads(CONFIG_FILE.read_text())
 
-    banks = []
+    sources = []
     if "application_id" in config:
-        banks.append(("Millennium BCP", bcp))
+        sources.append(("Millennium BCP", bcp))
     if "plaid_client_id" in config:
-        banks.append(("Desjardins", desjardins))
+        sources.append(("Desjardins", desjardins))
     if "natbank_user" in config or natbank.FOLDER.exists():
-        banks.append(("Natbank Mastercard", natbank))
-    if not banks:
-        sys.exit("No bank credentials in config.json (see config.example.json).")
-    if len(banks) == 1:
-        name, bank = banks[0]
+        sources.append(("Natbank Mastercard", natbank))
+    if "expenses_db" in config:
+        sources.append(("Reimbursed expenses", expenses_db))
+    if not sources:
+        sys.exit("No source credentials in config.json (see config.example.json).")
+    if len(sources) == 1:
+        name, source = sources[0]
     else:
-        for i, (name, _) in enumerate(banks, 1):
+        for i, (name, _) in enumerate(sources, 1):
             print(f"{i}) {name}")
-        choice = input("Bank to sync [1]: ").strip() or "1"
-        if choice not in [str(i) for i in range(1, len(banks) + 1)]:
+        choice = input("Source to sync [1]: ").strip() or "1"
+        if choice not in [str(i) for i in range(1, len(sources) + 1)]:
             sys.exit(f"Invalid choice {choice!r}")
-        name, bank = banks[int(choice) - 1]
-    raw = input(f"Lookback days [{bank.DAYS}]: ").strip()
+        name, source = sources[int(choice) - 1]
+    raw = input(f"Lookback days [{source.DAYS}]: ").strip()
     if raw and not raw.isdigit():
         sys.exit(f"Invalid number of days {raw!r}")
-    days = int(raw) if raw else bank.DAYS
+    days = int(raw) if raw else source.DAYS
     log.info("Syncing %s over the last %d day(s)", name, days)
-    txs = bank.fetch(config, days)
+    txs = source.fetch(config, days)
 
     token = sheets_token(config)
     grid_id = sheet_id(config, token)
