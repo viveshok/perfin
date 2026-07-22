@@ -14,6 +14,7 @@ import json
 import logging
 import re
 import sys
+import time
 import uuid
 from collections import Counter
 from datetime import datetime, timedelta, timezone
@@ -27,6 +28,7 @@ API = "https://api.enablebanking.com"
 HERE = Path(__file__).parent
 SESSION_FILE = HERE / "session.json"
 SOURCE = "Millennium BCP"
+ASPSP = {"name": "Millennium BCP", "country": "PT"}
 DAYS = 1
 
 log = logging.getLogger("perfin")
@@ -63,7 +65,14 @@ def psu_headers() -> dict:
 
 
 def api(method: str, path: str, headers: dict, fatal: bool = True, **kwargs) -> dict:
-    r = requests.request(method, f"{API}{path}", headers=headers, **kwargs)
+    # Wise behind Enable Banking intermittently returns 503; a short retry
+    # usually gets through.
+    for attempt in range(3):
+        r = requests.request(method, f"{API}{path}", headers=headers, **kwargs)
+        if r.status_code < 500 or attempt == 2:
+            break
+        log.info("API error %d on %s; retrying in 5s", r.status_code, path)
+        time.sleep(5)
     if not r.ok:
         message = f"API error {r.status_code} on {path}: {r.text}"
         if fatal:
@@ -73,13 +82,13 @@ def api(method: str, path: str, headers: dict, fatal: bool = True, **kwargs) -> 
     return r.json()
 
 
-def authorize(headers: dict) -> dict:
+def authorize(headers: dict, aspsp: dict, session_file: Path) -> dict:
     app = api("GET", "/application", headers)
     body = {
         "access": {
             "valid_until": (datetime.now(timezone.utc) + timedelta(days=90)).isoformat()
         },
-        "aspsp": {"name": "Millennium BCP", "country": "PT"},
+        "aspsp": aspsp,
         "state": str(uuid.uuid4()),
         "redirect_url": app["redirect_urls"][0],
         "psu_type": "personal",
@@ -92,20 +101,29 @@ def authorize(headers: dict) -> dict:
     redirected = input("Paste the URL you were redirected to: ")
     code = parse_qs(urlparse(redirected).query)["code"][0]
     session = api("POST", "/sessions", headers, json={"code": code})
+    if not session["accounts"]:
+        # Happens when the application runs in restricted mode and none of
+        # the consented accounts are whitelisted in the Control Panel.
+        sys.exit(
+            "The bank returned no accounts. Link the accounts to the "
+            "application in the Enable Banking Control Panel and try again."
+        )
     state = {
         "valid_until": session["access"]["valid_until"],
         "accounts": [a["uid"] for a in session["accounts"]],
     }
-    SESSION_FILE.write_text(json.dumps(state))
+    session_file.write_text(json.dumps(state))
     return state
 
 
-def get_session(headers: dict) -> dict:
-    if SESSION_FILE.exists():
-        state = json.loads(SESSION_FILE.read_text())
+def get_session(
+    headers: dict, aspsp: dict = ASPSP, session_file: Path = SESSION_FILE
+) -> dict:
+    if session_file.exists():
+        state = json.loads(session_file.read_text())
         if datetime.fromisoformat(state["valid_until"]) > datetime.now(timezone.utc):
             return state
-    return authorize(headers)
+    return authorize(headers, aspsp, session_file)
 
 
 def transactions(

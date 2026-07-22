@@ -5,6 +5,7 @@
   "plaid_secret": "your-plaid-production-secret",
   "natbank_user": "your-24-7cardaccess-user-id",
   "natbank_password": "your-24-7cardaccess-password",
+  "wise": true,
   "expenses_db": "expenses.exe.xyz:/opt/expenses/expenses.db",
   "service_account_key_file": "google_service_account.json",
   "spreadsheet_id": "your-google-spreadsheet-id",

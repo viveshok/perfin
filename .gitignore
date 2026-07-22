@@ -7,9 +7,11 @@ __pycache__/
 perfin/config.json
 perfin/session.json
 perfin/plaid_session.json
+perfin/wise_session.json
 perfin/natbank_profile/
 perfin/statements/
 perfin/google_service_account.json
+perfin/expenses.db*
 
 # expenses runtime files
 expenses/config.json

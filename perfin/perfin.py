@@ -5,6 +5,8 @@ Supported sources, each enabled by its keys being present in config.json:
 - Desjardins checking + credit card via Plaid (see desjardins.py for setup)
 - Natbank USD Mastercard via QFX files fetched from its card portal by a
   Playwright browser, or downloaded manually (see natbank.py for setup)
+- Wise, every active currency balance, via Enable Banking (see wise.py for
+  setup; reuses the bcp.py application credentials)
 - Reimbursed expenses from the expenses app's SQLite database (see
   expenses_db.py for setup)
 
@@ -48,6 +50,7 @@ import bcp
 import desjardins
 import expenses_db
 import natbank
+import wise
 
 SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets"
 HERE = Path(__file__).parent
@@ -367,6 +370,8 @@ def main() -> None:
         sources.append(("Desjardins", desjardins))
     if "natbank_user" in config or natbank.FOLDER.exists():
         sources.append(("Natbank Mastercard", natbank))
+    if config.get("wise"):
+        sources.append(("Wise", wise))
     if "expenses_db" in config:
         sources.append(("Reimbursed expenses", expenses_db))
     if not sources:
