@@ -163,15 +163,24 @@ def relevant(txs: list[dict]) -> list[dict]:
 
 
 def normalize(tx: dict, source: str) -> dict:
-    stamp = tx.get("datetime") or tx.get("authorized_datetime")
+    stamp = tx.get("authorized_datetime") or tx.get("datetime")
+    date = (
+        (tx.get("authorized_datetime") or "")[:10]
+        or tx.get("authorized_date")
+        or (tx.get("datetime") or "")[:10]
+        or tx["date"]
+    )
+    notes = ["(pending)"] if tx["pending"] else []
+    if tx["date"] != date:
+        notes.append(f"posted {tx['date']}")
     return {
-        "date": tx["date"],
+        "date": date,
         "time": stamp[11:16] if stamp else "",
         "amount": f"{tx['amount']:.2f}".rstrip("0").rstrip("."),
         "currency": tx.get("iso_currency_code") or "CAD",
         "desc": tx.get("merchant_name") or tx["name"],
         "source": source,
-        "notes": ["(pending)"] if tx["pending"] else [],
+        "notes": notes,
     }
 
 

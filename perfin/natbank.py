@@ -158,14 +158,16 @@ def parse_qfx(text: str) -> list[dict]:
     currency = field(text, "CURDEF") or "USD"
     txs = []
     for block in re.findall(r"<STMTTRN>(.*?)</STMTTRN>", text, re.DOTALL | re.I):
-        date, time = parse_stamp(field(block, "DTPOSTED"))
+        posted_date, posted_time = parse_stamp(field(block, "DTPOSTED"))
+        transaction_date, transaction_time = parse_stamp(field(block, "DTUSER"))
         memo = field(block, "MEMO")
         name = field(block, "NAME") or memo
         txs.append(
             {
                 "fitid": field(block, "FITID"),
-                "date": date,
-                "time": time,
+                "date": transaction_date or posted_date,
+                "time": transaction_time if transaction_date else posted_time,
+                "posted_date": posted_date,
                 "raw_amount": field(block, "TRNAMT"),
                 "currency": field(block, "ORIGCURRENCY") or currency,
                 "desc": name,
@@ -181,8 +183,8 @@ def relevant(txs: list[dict], since: str) -> list[dict]:
     kept = []
     for tx in txs:
         amount = float(tx["raw_amount"] or 0)
-        if tx["date"] < since:
-            reason = f"posted before fetch window ({tx['date']})"
+        if tx["posted_date"] < since:
+            reason = f"posted before fetch window ({tx['posted_date']})"
         elif amount >= 0:
             reason = "credit"
         else:
@@ -200,6 +202,9 @@ def relevant(txs: list[dict], since: str) -> list[dict]:
 
 
 def normalize(tx: dict) -> dict:
+    notes = list(tx["notes"])
+    if tx["posted_date"] and tx["posted_date"] != tx["date"]:
+        notes.append(f"posted {tx['posted_date']}")
     return {
         "date": tx["date"],
         "time": tx["time"],
@@ -207,7 +212,7 @@ def normalize(tx: dict) -> dict:
         "currency": tx["currency"],
         "desc": tx["desc"],
         "source": SOURCE,
-        "notes": tx["notes"],
+        "notes": notes,
     }
 
 
